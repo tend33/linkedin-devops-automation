@@ -19,60 +19,88 @@ pipeline {
     stages {
 
         stage('Select Generated Post') {
-            steps {
-                sh '''
-                    set -eu
-
-                    cd /volume1/docker/linkedin-automation
-
-                    if [ -n "${GENERATE_BUILD:-}" ]; then
-                        MANIFEST="jenkins-builds/${GENERATE_BUILD}.env"
-                    else
-                        MANIFEST="jenkins-builds/latest.env"
-                    fi
-
-                    if [ ! -f "$MANIFEST" ]; then
-                        echo "Manifest not found: $MANIFEST"
-                        exit 1
-                    fi
-
-                    . "$MANIFEST"
-
-                    test -f "drafts/$DRAFT_FILE"
-                    test -f "images/$IMAGE_FILE"
-                    test -f "drafts/$TEXT_FILE"
-
-                    echo "GENERATE_BUILD=$GENERATE_BUILD" > "$WORKSPACE/selected.env"
-                    echo "DRAFT_FILE=$DRAFT_FILE" > "$WORKSPACE/selected.env"
-                    echo "IMAGE_FILE=$IMAGE_FILE" >> "$WORKSPACE/selected.env"
-                    echo "TEXT_FILE=$TEXT_FILE" >> "$WORKSPACE/selected.env"
-
-                    echo "===== SELECTED POST ====="
-                    echo "Generation build: ${GENERATE_BUILD:-latest}"
-                    echo "Draft: $DRAFT_FILE"
-                    echo "Image: $IMAGE_FILE"
-                '''
-            }
-        }
-
-        stage('Duplicate Publish Check') {
     steps {
         sh '''
             set -eu
 
-            . "$WORKSPACE/selected.env"
-
             cd /volume1/docker/linkedin-automation
 
-            MARKER="jenkins-builds/${GENERATE_BUILD}.published"
+            REQUESTED_BUILD="${GENERATE_BUILD:-}"
 
-            if [ -f "$MARKER" ]; then
-                echo "======================================"
-                echo "STOP: This post was already published."
-                echo "======================================"
-                cat "$MARKER"
+            if [ -n "$REQUESTED_BUILD" ]; then
+                MANIFEST="jenkins-builds/${REQUESTED_BUILD}.env"
+            else
+                MANIFEST="jenkins-builds/latest.env"
+            fi
+
+            if [ ! -f "$MANIFEST" ]; then
+                echo "Manifest not found: $MANIFEST"
                 exit 1
             fi
+
+            . "$MANIFEST"
+
+            # Older manifests may not contain GENERATE_BUILD.
+            # If a build number was entered manually, use that.
+            if [ -z "${GENERATE_BUILD:-}" ] && [ -n "$REQUESTED_BUILD" ]; then
+                GENERATE_BUILD="$REQUESTED_BUILD"
+            fi
+
+            # For older latest.env files, find the numbered manifest
+            # containing the same draft filename.
+            if [ -z "${GENERATE_BUILD:-}" ]; then
+                for FILE in jenkins-builds/[0-9]*.env; do
+                    [ -f "$FILE" ] || continue
+
+                    if grep -Fqx "DRAFT_FILE=$DRAFT_FILE" "$FILE"; then
+                        GENERATE_BUILD=$(basename "$FILE" .env)
+                        break
+                    fi
+                done
+            fi
+
+            if [ -z "${GENERATE_BUILD:-}" ]; then
+                echo "Unable to determine generation build number."
+                exit 1
+            fi
+
+            test -f "drafts/$DRAFT_FILE"
+            test -f "images/$IMAGE_FILE"
+            test -f "drafts/$TEXT_FILE"
+
+            {
+                echo "GENERATE_BUILD=$GENERATE_BUILD"
+                echo "DRAFT_FILE=$DRAFT_FILE"
+                echo "IMAGE_FILE=$IMAGE_FILE"
+                echo "TEXT_FILE=$TEXT_FILE"
+            } > "$WORKSPACE/selected.env"
+
+            echo "===== SELECTED POST ====="
+            echo "Generation build: $GENERATE_BUILD"
+            echo "Draft: $DRAFT_FILE"
+            echo "Image: $IMAGE_FILE"
+        '''
+    }
+}
+
+		stage('Duplicate Publish Check') {
+            steps {
+                sh '''
+                    set -eu
+
+                    . "$WORKSPACE/selected.env"
+
+                    cd /volume1/docker/linkedin-automation
+
+                    MARKER="jenkins-builds/${GENERATE_BUILD}.published"
+
+                 if [ -f "$MARKER" ]; then
+                     echo "======================================"
+                     echo "STOP: This post was already published."
+                     echo "======================================"
+                     cat "$MARKER"
+                     exit 1
+                  fi
 
             echo "Duplicate check: OK"
             echo "Generation build #$GENERATE_BUILD has not been published."
