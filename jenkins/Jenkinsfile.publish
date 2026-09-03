@@ -239,7 +239,7 @@ EOF
         '''
     }
 }
-
+}
 
     post {
         success {
