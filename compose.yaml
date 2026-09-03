@@ -1,0 +1,13 @@
+services:
+  linkedin-auto:
+    build: .
+    image: linkedin-auto:local
+    container_name: linkedin-auto
+
+    env_file:
+      - .env
+
+    volumes:
+      - /volume1/docker/linkedin-automation:/app
+
+    restart: "no"

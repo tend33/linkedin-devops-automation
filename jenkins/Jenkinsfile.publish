@@ -1,0 +1,200 @@
+pipeline {
+    agent {
+        label 'docker'
+    }
+
+    options {
+        disableConcurrentBuilds()
+        timestamps()
+    }
+
+    parameters {
+        string(
+            name: 'GENERATE_BUILD',
+            defaultValue: '',
+            description: 'linkedin-generate build number. Leave blank to use latest successful generation.'
+        )
+    }
+
+    stages {
+
+        stage('Select Generated Post') {
+            steps {
+                sh '''
+                    set -eu
+
+                    cd /volume1/docker/linkedin-automation
+
+                    if [ -n "${GENERATE_BUILD:-}" ]; then
+                        MANIFEST="jenkins-builds/${GENERATE_BUILD}.env"
+                    else
+                        MANIFEST="jenkins-builds/latest.env"
+                    fi
+
+                    if [ ! -f "$MANIFEST" ]; then
+                        echo "Manifest not found: $MANIFEST"
+                        exit 1
+                    fi
+
+                    . "$MANIFEST"
+
+                    test -f "drafts/$DRAFT_FILE"
+                    test -f "images/$IMAGE_FILE"
+                    test -f "drafts/$TEXT_FILE"
+
+                    echo "GENERATE_BUILD=$GENERATE_BUILD" > "$WORKSPACE/selected.env"
+                    echo "DRAFT_FILE=$DRAFT_FILE" > "$WORKSPACE/selected.env"
+                    echo "IMAGE_FILE=$IMAGE_FILE" >> "$WORKSPACE/selected.env"
+                    echo "TEXT_FILE=$TEXT_FILE" >> "$WORKSPACE/selected.env"
+
+                    echo "===== SELECTED POST ====="
+                    echo "Generation build: ${GENERATE_BUILD:-latest}"
+                    echo "Draft: $DRAFT_FILE"
+                    echo "Image: $IMAGE_FILE"
+                '''
+            }
+        }
+
+        stage('Duplicate Publish Check') {
+    steps {
+        sh '''
+            set -eu
+
+            . "$WORKSPACE/selected.env"
+
+            cd /volume1/docker/linkedin-automation
+
+            MARKER="jenkins-builds/${GENERATE_BUILD}.published"
+
+            if [ -f "$MARKER" ]; then
+                echo "======================================"
+                echo "STOP: This post was already published."
+                echo "======================================"
+                cat "$MARKER"
+                exit 1
+            fi
+
+            echo "Duplicate check: OK"
+            echo "Generation build #$GENERATE_BUILD has not been published."
+        '''
+    }
+}
+ 
+        stage('Preview Post') {
+            steps {
+                sh '''
+                    set -eu
+
+                    . "$WORKSPACE/selected.env"
+
+                    cd /volume1/docker/linkedin-automation
+
+                    echo "===== LINKEDIN POST PREVIEW ====="
+                    cat "drafts/$TEXT_FILE"
+                    echo ""
+                    echo "================================"
+                    echo "Image: $IMAGE_FILE"
+                '''
+            }
+        }
+        
+        stage('Review Research') {
+    steps {
+        sh '''
+            set -eu
+
+            . "$WORKSPACE/selected.env"
+
+            cd /volume1/docker/linkedin-automation
+
+            echo ""
+            echo "===== RESEARCH USED FOR THIS POST ====="
+
+            if jq -e '.research' "drafts/$DRAFT_FILE" >/dev/null 2>&1; then
+
+                echo ""
+                echo "TOPIC"
+                echo "====="
+                jq -r '.research.topic // "Unknown"' \
+                  "drafts/$DRAFT_FILE"
+
+                echo ""
+                echo "RESEARCH SUMMARY"
+                echo "================"
+                jq -r '.research.research_summary // "No summary available."' \
+                  "drafts/$DRAFT_FILE"
+
+                echo ""
+                echo "SOURCES"
+                echo "======="
+                jq -r '
+                    .research.sources[]? |
+                    "- " + (.title // "Untitled source") +
+                    "\n  " + (.url // "No URL")
+                ' "drafts/$DRAFT_FILE"
+
+            else
+                echo "This post does not contain web research."
+            fi
+
+            echo ""
+            echo "======================================="
+        '''
+    }
+}
+
+        stage('Approval') {
+            steps {
+                input(
+                    message: 'Publish this post to LinkedIn?',
+                    ok: 'Publish'
+                )
+            }
+        }
+
+        stage('Publish to LinkedIn') {
+    steps {
+        sh '''
+            set -eu
+
+            . "$WORKSPACE/selected.env"
+
+            cd /volume1/docker/linkedin-automation
+
+            docker compose run --rm linkedin-auto \
+              --base-dir /app \
+              --draft-json "/app/drafts/$DRAFT_FILE" \
+              --image-file "/app/images/$IMAGE_FILE" \
+              --publish
+
+            MARKER="jenkins-builds/${GENERATE_BUILD}.published"
+
+            cat > "$MARKER" <<EOF
+GENERATE_BUILD=$GENERATE_BUILD
+PUBLISH_BUILD=$BUILD_NUMBER
+DRAFT_FILE=$DRAFT_FILE
+IMAGE_FILE=$IMAGE_FILE
+PUBLISHED_AT=$(date -Iseconds)
+EOF
+
+            echo "Publish marker created:"
+            cat "$MARKER"
+        '''
+    }
+}
+    }
+
+    post {
+        success {
+            echo 'LinkedIn post published successfully.'
+        }
+
+        aborted {
+            echo 'LinkedIn publishing cancelled.'
+        }
+
+        failure {
+            echo 'LinkedIn publishing failed.'
+        }
+    }
+}

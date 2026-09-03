@@ -1,0 +1,43 @@
+services:
+
+  jenkins:
+    image: jenkins/jenkins:lts-jdk21
+    container_name: linkedin-jenkins
+
+    ports:
+      - "8080:8080"
+
+    environment:
+      - TZ=Asia/Singapore
+
+    volumes:
+      - /volume1/docker/jenkins/home:/var/jenkins_home
+
+    restart: unless-stopped
+
+
+  jenkins-agent:
+    build:
+      context: ./agent
+
+    container_name: synology-docker-agent
+
+    env_file:
+      - agent.env
+  
+    group_add:
+      - "0"
+
+    volumes:
+      - /volume1/docker/jenkins/agent-work:/home/jenkins/agent
+
+      # Allows agent to run Docker
+      - /var/run/docker.sock:/var/run/docker.sock
+
+      # Allows agent to see LinkedIn project
+      - /volume1/docker/linkedin-automation:/volume1/docker/linkedin-automation
+
+    depends_on:
+      - jenkins
+
+    restart: unless-stopped

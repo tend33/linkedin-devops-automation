@@ -1,0 +1,179 @@
+pipeline {
+    agent {
+        label 'docker'
+    }
+
+    options {
+        disableConcurrentBuilds()
+        timestamps()
+    }
+
+    triggers {
+        cron('0 9 * * 1,3,5')
+    }
+
+    parameters {
+        string(
+            name: 'TOPIC',
+            defaultValue: '',
+            description: 'Optional. Leave blank and Jenkins will choose a DevOps topic automatically.'
+        )
+    }
+
+    stages {
+
+        stage('Generate LinkedIn Content') {
+    steps {
+        sh '''
+            set -eu
+
+            cd /volume1/docker/linkedin-automation
+
+            if [ -n "${TOPIC:-}" ]; then
+
+                echo "===== MANUAL TOPIC ====="
+                echo "$TOPIC"
+
+                docker compose run --rm linkedin-auto \
+                  --base-dir /app \
+                  --topic "$TOPIC"
+
+            else
+
+                echo "===== AUTOMATIC TOPIC ====="
+
+                docker compose run --rm linkedin-auto \
+                  --base-dir /app \
+                  --auto-topic
+
+            fi
+        '''
+           }
+          }
+
+        stage('Record Generated Files') {
+    steps {
+        sh '''
+            set -eu
+
+            cd /volume1/docker/linkedin-automation
+
+            DRAFT=$(ls -1t drafts/*.json | head -1)
+            PREFIX=$(basename "$DRAFT" .json)
+
+            TEXT="drafts/${PREFIX}.txt"
+            IMAGE="images/${PREFIX}.png"
+
+            test -f "$DRAFT"
+            test -f "$TEXT"
+            test -f "$IMAGE"
+
+            echo "===== GENERATED FILES ====="
+            echo "Draft: $DRAFT"
+            echo "Text:  $TEXT"
+            echo "Image: $IMAGE"
+
+            mkdir -p jenkins-builds
+
+            cat > "jenkins-builds/${BUILD_NUMBER}.env" <<EOF
+GENERATE_BUILD=${BUILD_NUMBER}
+DRAFT_FILE=$(basename "$DRAFT")
+IMAGE_FILE=$(basename "$IMAGE")
+TEXT_FILE=$(basename "$TEXT")
+EOF
+
+            cp "jenkins-builds/${BUILD_NUMBER}.env" \
+               "jenkins-builds/latest.env"
+
+            rm -rf "$WORKSPACE/output"
+            mkdir -p "$WORKSPACE/output"
+
+            cp "$DRAFT" "$WORKSPACE/output/"
+            cp "$TEXT" "$WORKSPACE/output/"
+            cp "$IMAGE" "$WORKSPACE/output/"
+            cp "jenkins-builds/${BUILD_NUMBER}.env" \
+               "$WORKSPACE/output/"
+
+            echo "===== EXTRACTING RESEARCH ====="
+
+            if jq -e '.research' "$DRAFT" >/dev/null 2>&1; then
+
+                {
+                    echo "TOPIC"
+                    echo "====="
+                    jq -r '.research.topic // "Unknown"' "$DRAFT"
+
+                    echo ""
+                    echo "RESEARCH SUMMARY"
+                    echo "================"
+                    jq -r '.research.research_summary // "No research summary available."' "$DRAFT"
+                } > "$WORKSPACE/output/research.txt"
+
+                jq -r '
+                    .research.sources[]? |
+                    "- " + (.title // "Untitled source") +
+                    "\\n  " + (.url // "No URL")
+                ' "$DRAFT" > "$WORKSPACE/output/sources.txt"
+
+            else
+
+                echo "No web research was used for this post." \
+                    > "$WORKSPACE/output/research.txt"
+
+                echo "No research sources available." \
+                    > "$WORKSPACE/output/sources.txt"
+
+            fi
+        '''
+    }
+}
+
+        stage('Preview Post') {
+    steps {
+        sh '''
+            set -eu
+
+            cd /volume1/docker/linkedin-automation
+
+            . "$WORKSPACE/output/${BUILD_NUMBER}.env"
+
+            echo ""
+            echo "===== LINKEDIN POST PREVIEW ====="
+            cat "$WORKSPACE/output/$TEXT_FILE"
+
+            echo ""
+            echo "===== RESEARCH SUMMARY ====="
+            cat "$WORKSPACE/output/research.txt"
+
+            echo ""
+            echo "===== SOURCES ====="
+            cat "$WORKSPACE/output/sources.txt"
+
+            echo ""
+            echo "================================="
+        '''
+    }
+}
+
+        stage('Archive') {
+            steps {
+                archiveArtifacts(
+                    artifacts: 'output/*',
+                    fingerprint: true
+                )
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "LinkedIn generation build #${BUILD_NUMBER} completed."
+            echo 'Draft and image are ready for review.'
+            echo 'Nothing has been published to LinkedIn.'
+        }
+
+        failure {
+            echo 'LinkedIn generation failed.'
+        }
+    }
+}
