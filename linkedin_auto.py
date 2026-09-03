@@ -66,10 +66,13 @@ def save_bytes(path: Path, content: bytes):
 
 
 def generate_content_plan(client: OpenAI, topic: str, text_model: str, research=None) -> dict:
+
     research_context = ""
 
     if research:
         research_context = f"""
+Use the following research as the factual basis of the post.
+
 Research summary:
 {research.get("research_summary", "")}
 
@@ -79,14 +82,24 @@ Sources:
     indent=2,
     ensure_ascii=False
 )}
+
+Do not invent factual claims that are not supported by this research.
 """
+
+    else:
+        research_context = """
+No external research was supplied.
+
+Write a practical LinkedIn post based on the user's topic.
+
+Do not claim specific recent news, release details, dates,
+statistics, or other unverifiable facts unless they are
+already inherent in the supplied topic.
+""" 
     prompt = f"""
-You are creating content for a professional personal LinkedIn account.
 
 Topic:
 {topic}
-
-Use the following research as the factual basis of the post:
 
 {research_context}
 
