@@ -83,31 +83,46 @@ pipeline {
     }
 }
 
-		stage('Duplicate Publish Check') {
+        stage('Duplicate Publish Check') {
             steps {
                 sh '''
-                    set -eu
+            set -eu
 
-                    . "$WORKSPACE/selected.env"
+            . "$WORKSPACE/selected.env"
 
-                    cd /volume1/docker/linkedin-automation
+            cd /volume1/docker/linkedin-automation
 
-                    MARKER="jenkins-builds/${GENERATE_BUILD}.published"
+            PREFIX=$(basename "$DRAFT_FILE" .json)
 
-                 if [ -f "$MARKER" ]; then
-                     echo "======================================"
-                     echo "STOP: This post was already published."
-                     echo "======================================"
-                     cat "$MARKER"
-                     exit 1
-                  fi
+            BUILD_MARKER="jenkins-builds/${GENERATE_BUILD}.published"
+            DRAFT_MARKER="published/${PREFIX}.published"
+
+            echo "===== DUPLICATE PUBLISH CHECK ====="
+            echo "Generation build: $GENERATE_BUILD"
+            echo "Draft: $DRAFT_FILE"
+
+            if [ -f "$DRAFT_MARKER" ]; then
+                echo "======================================"
+                echo "STOP: This draft was already published."
+                echo "======================================"
+                cat "$DRAFT_MARKER"
+                exit 1
+            fi
+
+            if [ -f "$BUILD_MARKER" ]; then
+                echo "=============================================="
+                echo "STOP: This generation build was already published."
+                echo "=============================================="
+                cat "$BUILD_MARKER"
+                exit 1
+            fi
 
             echo "Duplicate check: OK"
-            echo "Generation build #$GENERATE_BUILD has not been published."
+            echo "This post has not been published."
         '''
     }
 }
- 
+
         stage('Preview Post') {
             steps {
                 sh '''
@@ -189,28 +204,42 @@ pipeline {
 
             cd /volume1/docker/linkedin-automation
 
+            PREFIX=$(basename "$DRAFT_FILE" .json)
+
+            BUILD_MARKER="jenkins-builds/${GENERATE_BUILD}.published"
+            DRAFT_MARKER="published/${PREFIX}.published"
+
+            mkdir -p published
+
+            echo "===== PUBLISHING TO LINKEDIN ====="
+
             docker compose run --rm linkedin-auto \
               --base-dir /app \
               --draft-json "/app/drafts/$DRAFT_FILE" \
               --image-file "/app/images/$IMAGE_FILE" \
               --publish
 
-            MARKER="jenkins-builds/${GENERATE_BUILD}.published"
+            PUBLISHED_AT=$(date -Iseconds)
 
-            cat > "$MARKER" <<EOF
+            cat > "$DRAFT_MARKER" <<EOF
 GENERATE_BUILD=$GENERATE_BUILD
 PUBLISH_BUILD=$BUILD_NUMBER
 DRAFT_FILE=$DRAFT_FILE
 IMAGE_FILE=$IMAGE_FILE
-PUBLISHED_AT=$(date -Iseconds)
+PUBLISHED_AT=$PUBLISHED_AT
+PUBLISHED_BY=jenkins
 EOF
 
-            echo "Publish marker created:"
-            cat "$MARKER"
+            cp "$DRAFT_MARKER" "$BUILD_MARKER"
+
+            echo ""
+            echo "===== PUBLISH COMPLETE ====="
+            echo "Draft marker: $DRAFT_MARKER"
+            echo "Build marker: $BUILD_MARKER"
         '''
     }
 }
-    }
+
 
     post {
         success {
