@@ -194,8 +194,8 @@ pipeline {
                 )
             }
         }
-
-        stage('Publish to LinkedIn') {
+       
+       stage('Publish to LinkedIn') {
     steps {
         sh '''
             set -eu
@@ -208,9 +208,45 @@ pipeline {
 
             BUILD_MARKER="jenkins-builds/${GENERATE_BUILD}.published"
             DRAFT_MARKER="published/${PREFIX}.published"
+            DRAFT_LOCK="published/${PREFIX}.publishing"
 
             mkdir -p published
 
+            echo "===== PRE-PUBLISH SAFETY CHECK ====="
+
+            # Confirm Jenkins can write to the marker directory
+            TEST_MARKER="published/.write-test-${BUILD_NUMBER}"
+
+            if ! touch "$TEST_MARKER"; then
+                echo "ERROR: Jenkins cannot write to published/"
+                echo "Aborting BEFORE contacting LinkedIn."
+                exit 1
+            fi
+
+            rm -f "$TEST_MARKER"
+
+            echo "Marker directory write test: OK"
+
+            # Prevent two publish attempts running for the same draft
+            if [ -f "$DRAFT_LOCK" ]; then
+                echo "======================================"
+                echo "STOP: This draft is already being published."
+                echo "======================================"
+                cat "$DRAFT_LOCK"
+                exit 1
+            fi
+
+            # Create temporary publishing lock
+            cat > "$DRAFT_LOCK" <<EOF
+GENERATE_BUILD=$GENERATE_BUILD
+PUBLISH_BUILD=$BUILD_NUMBER
+DRAFT_FILE=$DRAFT_FILE
+STARTED_AT=$(date -Iseconds)
+EOF
+
+            echo "Publish lock created: $DRAFT_LOCK"
+
+            echo ""
             echo "===== PUBLISHING TO LINKEDIN ====="
 
             docker compose run --rm linkedin-auto \
@@ -232,14 +268,20 @@ EOF
 
             cp "$DRAFT_MARKER" "$BUILD_MARKER"
 
+            # Remove temporary lock only after markers are safely created
+            rm -f "$DRAFT_LOCK"
+
             echo ""
             echo "===== PUBLISH COMPLETE ====="
             echo "Draft marker: $DRAFT_MARKER"
             echo "Build marker: $BUILD_MARKER"
+            echo "Publish lock removed."
         '''
     }
 }
-}
+
+
+       }
 
     post {
         success {
