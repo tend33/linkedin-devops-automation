@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>LinkedIn DevOps Automation</title>
+
+    <link
+        rel="stylesheet"
+        href="{{ url_for('static', filename='style.css') }}"
+    >
+</head>
+
+<body>
+
+<header class="header">
+    <div class="container header-content">
+        <div>
+            <h1>LinkedIn DevOps Automation</h1>
+            <p>AI-assisted DevOps content workflow</p>
+        </div>
+
+        <a href="{{ url_for('generate') }}"
+           class="btn btn-primary">
+            + Generate Post
+        </a>
+    </div>
+</header>
+
+<main class="container main">
+
+    {% with messages = get_flashed_messages() %}
+        {% if messages %}
+            {% for message in messages %}
+                <div class="flash">
+                    {{ message }}
+                </div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+
+    <div class="summary-grid">
+
+        <div class="summary-card">
+            <div>Total Drafts</div>
+            <div class="number">{{ drafts|length }}</div>
+        </div>
+
+        <div class="summary-card">
+            <div>Content Mode</div>
+            <div class="number" style="font-size:20px;">
+                Manual + AI
+            </div>
+        </div>
+
+        <div class="summary-card">
+            <div>Scheduled Generation</div>
+            <div class="number" style="font-size:20px;">
+                Mon / Wed / Fri
+            </div>
+        </div>
+
+    </div>
+
+    <h2>Recent Drafts</h2>
+
+    {% for draft in drafts %}
+
+        <div class="card">
+
+            <div class="card-header">
+
+                <div>
+                    <h3 class="card-title">
+                        {{ draft.prefix }}
+                    </h3>
+                </div>
+
+              {% if draft.published %}
+
+          <span class="badge badge-published">
+                 Published
+          </span>
+
+              {% else %}
+
+          <span class="badge badge-draft">
+                 Draft
+          </span>
+
+              {% endif %} 
+            </div>
+
+            <div class="card-preview">
+                {{ draft.post_text[:320] }}
+                {% if draft.post_text|length > 320 %}
+                    ...
+                {% endif %}
+            </div>
+
+            <p>
+                <a
+                    class="btn btn-secondary"
+                    href="{{ url_for(
+                        'preview',
+                        filename=draft.filename
+                    ) }}"
+                >
+                    Preview
+                </a>
+            </p>
+
+        </div>
+
+    {% else %}
+
+        <div class="card">
+            No drafts available.
+        </div>
+
+    {% endfor %}
+
+</main>
+
+</body>
+</html>

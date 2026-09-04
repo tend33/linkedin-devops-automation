@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>Generate Post</title>
+
+    <link
+        rel="stylesheet"
+        href="{{ url_for('static', filename='style.css') }}"
+    >
+</head>
+
+<body>
+
+<header class="header">
+    <div class="container header-content">
+        <div>
+            <h1>Generate LinkedIn Post</h1>
+            <p>Create manually or research a current DevOps topic</p>
+        </div>
+
+        <a href="{{ url_for('dashboard') }}"
+           class="btn btn-secondary">
+            Dashboard
+        </a>
+    </div>
+</header>
+
+<main class="container main">
+
+    <div class="card form-card">
+
+        <form method="post">
+
+            <label for="topic">
+                Topic
+            </label>
+
+            <input
+                id="topic"
+                type="text"
+                name="topic"
+                placeholder="e.g. What I learned troubleshooting Kubernetes networking"
+            >
+
+            <div class="checkbox-row">
+
+                <input
+                    id="auto_topic"
+                    type="checkbox"
+                    name="auto_topic"
+                >
+
+                <label for="auto_topic">
+                    Automatically research a recent DevOps topic
+                </label>
+
+            </div>
+
+            <button
+                type="submit"
+                class="btn btn-primary"
+            >
+                Generate Draft
+            </button>
+
+        </form>
+
+    </div>
+
+</main>
+
+</body>
+</html>

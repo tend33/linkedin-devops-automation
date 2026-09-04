@@ -32,3 +32,4 @@ jenkins/agent-work/
 # Local backups
 *.backup
 *.before-*
+published/

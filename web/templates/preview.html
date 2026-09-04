@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>Post Preview</title>
+
+    <link
+        rel="stylesheet"
+        href="{{ url_for('static', filename='style.css') }}"
+    >
+</head>
+
+<body>
+
+<header class="header">
+    <div class="container header-content">
+
+        <div>
+            <h1>Post Preview</h1>
+            <p>Review content, image and research</p>
+        </div>
+
+        <a
+            href="{{ url_for('dashboard') }}"
+            class="btn btn-secondary"
+        >
+            Dashboard
+        </a>
+
+    </div>
+</header>
+
+<main class="container main">
+
+    <div class="card">
+
+        <h2>LinkedIn Post</h2>
+
+        <div class="post-text">
+{{ draft.post_text }}
+        </div>
+
+    </div>
+
+    {% if image_name %}
+
+    <div class="card">
+
+        <h2>Generated Image</h2>
+
+        <img
+            class="post-image"
+            src="{{ url_for(
+                'images',
+                filename=image_name
+            ) }}"
+        >
+
+    </div>
+
+    {% endif %}
+
+
+    {% if draft.research %}
+
+    <div class="card">
+
+        <h2>Research Summary</h2>
+
+        <p style="line-height:1.65;">
+            {{ draft.research.research_summary }}
+        </p>
+
+    </div>
+
+
+    <div class="card">
+
+        <h2>Sources</h2>
+
+        <ul class="source-list">
+
+        {% for source in draft.research.sources %}
+
+            <li>
+                <a
+                    href="{{ source.url }}"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                >
+                    {{ source.title }}
+                </a>
+            </li>
+
+        {% endfor %}
+
+        </ul>
+
+    </div>
+
+    {% endif %}
+
+<div class="card">
+
+{% if published %}
+
+    <span class="badge badge-published">
+        Published
+    </span>
+
+    <p>
+        This draft has already been published to LinkedIn.
+    </p>
+
+{% elif publishing %}
+
+    <span class="badge badge-draft">
+        Publishing Lock
+    </span>
+
+    <p>
+        This draft has a publishing lock.
+        Verify its LinkedIn status before attempting another publish.
+    </p>
+
+{% else %}
+
+    <h2>Publish</h2>
+
+    <p>
+        Review the post, image, research and sources above
+        before publishing.
+    </p>
+
+    <form
+        method="post"
+        action="{{ url_for(
+            'publish',
+            filename=filename
+        ) }}"
+        onsubmit="return confirm(
+            'Publish this post to LinkedIn?'
+        );"
+    >
+
+        <button
+            type="submit"
+            class="btn btn-primary"
+        >
+            Publish to LinkedIn
+        </button>
+
+    </form>
+
+{% endif %}
+
+</div>
+
+</main>
+
+</body>
+</html>
