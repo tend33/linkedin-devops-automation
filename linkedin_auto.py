@@ -65,100 +65,136 @@ def save_bytes(path: Path, content: bytes):
     path.write_bytes(content)
 
 
-def generate_content_plan(client: OpenAI, topic: str, text_model: str, research=None) -> dict:
-
-    research_context = ""
-
+def generate_content_plan(
+    client,
+    model,
+    topic,
+    research=None
+):
     if research:
         research_context = f"""
-Use the following research as the factual basis of the post.
+RESEARCH CONTEXT:
 
-Research summary:
 {research.get("research_summary", "")}
 
 Sources:
-{json.dumps(
-    research.get("sources", []),
-    indent=2,
-    ensure_ascii=False
-)}
+{research.get("sources", [])}
 
-Do not invent factual claims that are not supported by this research.
+Use this research as the factual basis for any current or
+time-sensitive claims.
+
+Do not invent facts that are not supported by the research.
 """
-
     else:
         research_context = """
 No external research was supplied.
 
-Write a practical LinkedIn post based on the user's topic.
+Write a practical post based on the supplied topic and general
+engineering principles.
 
-Do not claim specific recent news, release details, dates,
-statistics, or other unverifiable facts unless they are
-already inherent in the supplied topic.
-""" 
+Do not invent specific version numbers, announcements, dates,
+benchmarks or current product changes.
+"""
+
     prompt = f"""
+Create a professional LinkedIn post about:
 
-Topic:
 {topic}
 
 {research_context}
 
-Do not invent facts that are not supported by the research.
+AUTHOR POSITIONING:
 
-Return STRICT JSON only with these keys:
-- post_text
-- image_prompt
-- alt_text
-- image_title
+The author is an experienced infrastructure / IT engineer developing
+deeper hands-on DevOps, cloud and automation skills.
 
-Rules:
-- post_text: 120 to 180 words, professional, practical, first-person, not salesy.
-- Include 3 to 5 relevant hashtags at the end.
-- Do not use markdown headings.
-- image_prompt:
-  Create a premium professional LinkedIn technology infographic.
+The author has practical lab and personal-project experience with
+Jenkins, Docker, Kubernetes, Terraform, Ansible, AWS, Prometheus,
+Grafana, Python and GitHub.
 
-  Use a 16:9 landscape composition with professionally used, color matching tones.
+IMPORTANT:
+Never imply that the author operated something in enterprise
+production unless that experience is explicitly supplied.
 
-  Visually explain the topic rather than creating generic decorative artwork.
+Correctly distinguish between:
+- professional experience
+- hands-on lab/project experience
+- researched industry developments
 
-  For DevOps topics, use clean architecture diagrams, pipeline flows,
-  servers, containers, cloud infrastructure, dashboards and connected
-  automation stages where relevant.
+WRITING STYLE:
 
-  Use large readable typography only.
-  Avoid paragraphs and tiny text.
-  Use no more than one headline plus short labels.
+Choose ONE of these post formats naturally:
 
-  Do not use official vendor logos.
-  Tool names such as Jenkins, Docker, Kubernetes, Terraform, Ansible,
-  Prometheus and Grafana may appear as text labels.
+A. Practical lesson from a project
+B. Architecture explanation
+C. Troubleshooting story:
+   problem -> investigation -> cause -> fix -> lesson
+D. Engineering observation or opinion
+E. Recent technology/change analysis
+F. "How I built this" project update
+G. Technology comparison and appropriate use cases
 
-  Modern enterprise technology aesthetic.
-  Clean spacing.
-  High-end infographic quality.
-  No watermark.
-- alt_text: concise accessibility text describing the generated image.
-- image_title: short title for the image/post asset.
+Do NOT use the same format repeatedly.
 
-Output JSON only.
-""".strip()
+Avoid repetitive phrases such as:
+- "My practical checklist"
+- "For me..."
+- "I would..." in every paragraph
+- "Here are 5 things..."
+- generic motivational conclusions
+
+Write naturally, as an engineer sharing something useful with other
+technical professionals.
+
+Prefer:
+- concrete engineering examples
+- lessons learned
+- trade-offs
+- failure scenarios
+- architecture decisions
+- troubleshooting
+- operational considerations
+
+POST REQUIREMENTS:
+
+- approximately 180-350 words
+- suitable for LinkedIn
+- readable short paragraphs
+- no markdown table
+- do not overuse emojis
+- 3-6 relevant hashtags at the end
+- do not mention being an AI
+- do not ask the reader to provide missing information
+- never output a refusal or research warning as the post
+
+IMAGE:
+
+Create an image concept directly related to the post.
+
+For DevOps/infrastructure topics:
+- professional enterprise technology visual
+- architecture, pipeline or infrastructure concepts where relevant
+- navy / blue / teal aesthetic
+- minimal readable text
+- 16:9 LinkedIn-friendly composition
+- no official vendor logos
+
+Return ONLY valid JSON:
+
+{{
+  "post_text": "...",
+  "image_prompt": "...",
+  "alt_text": "...",
+  "image_title": "..."
+}}
+"""
 
     response = client.responses.create(
-        model=text_model,
+        model=model,
         input=prompt,
     )
 
-    raw = response.output_text
-    data = extract_json_object(raw)
-
-    required_keys = {"post_text", "image_prompt", "alt_text", "image_title"}
-    missing = required_keys - set(data.keys())
-    if missing:
-        raise RuntimeError(f"Model output missing keys: {missing}")
-
-    return data
-
+    return extract_json_object(response.output_text)
 
 def generate_image_bytes(client: OpenAI, image_model: str, prompt: str) -> bytes:
     result = client.images.generate(
@@ -295,69 +331,93 @@ def create_linkedin_post(
     return post_id, body
 
 def generate_fresh_topic(client, model, recent_topics):
-
-    previous_topics = "\n".join(
+    recent_topics_text = "\n".join(
         f"- {topic}" for topic in recent_topics
-    )
+    ) or "None"
 
     prompt = f"""
-Find one recent DevOps development from approximately the last 7 days
-that would make a useful professional LinkedIn post.
+You are selecting ONE LinkedIn topic for a professional focused on
+DevOps, Cloud, Infrastructure and Automation.
 
-Prefer:
-- Kubernetes
+The author's background includes hands-on work with:
+- Jenkins and CI/CD
 - Docker
-- Jenkins
+- Kubernetes
 - Terraform
 - Ansible
-- CI/CD
-- DevSecOps
-- Prometheus
-- Grafana
-- observability
-- cloud infrastructure
+- AWS and Azure
+- Prometheus and Grafana
+- Linux
+- Python automation
+- GitHub
+- self-hosting and infrastructure troubleshooting
 
-Avoid:
-- advertisements
-- vague AI hype
-- cryptocurrency
-- clickbait
-- repeating or closely resembling recent topics
+Choose ONE topic from these categories:
 
-Recent topics already used:
+1. Jenkins / CI/CD
+2. Docker / containers
+3. Kubernetes / cloud native
+4. Terraform / Infrastructure as Code
+5. Ansible / configuration management
+6. AWS / Azure cloud engineering
+7. Prometheus / Grafana / observability
+8. Linux / infrastructure operations
+9. DevSecOps / software supply-chain security
+10. Python / automation
+11. Git / GitHub / software delivery
+12. Real-world troubleshooting lessons
+13. Self-hosting / homelab engineering
+14. Platform engineering / SRE
 
-{previous_topics if previous_topics else "None yet"}
+CONTENT DIVERSITY RULES:
 
-Research the selected development using reliable sources.
+- Do NOT select the same primary technology as any of the last 3 posts.
+- Do not allow Kubernetes to dominate the content.
+- Kubernetes should represent roughly no more than 20% of posts over time.
+- Avoid several consecutive release-note posts from the same product.
+- Prefer topics with practical engineering value.
+- Prefer architecture, troubleshooting, automation, CI/CD,
+  observability and lessons learned.
+- A topic does NOT need to be breaking news.
+- If there is no worthwhile recent development, choose a useful
+  evergreen engineering topic instead.
+- Do not select a topic that is substantially similar to recent topics.
 
-Return JSON only in this format:
+Recent topics:
+
+{recent_topics_text}
+
+Research the selected topic using web search when it concerns a recent
+release, product change, security issue or other time-sensitive fact.
+
+If the topic is evergreen and does not depend on current information,
+sources may be empty.
+
+If the topic is time-sensitive, sources MUST contain at least one
+credible source.
+
+Return ONLY valid JSON in this structure:
 
 {{
-  "topic": "Concise topic title",
-  "research_summary": "A factual 100-150 word summary of what happened and why it matters",
+  "topic": "short topic title",
+  "category": "one category from the list above",
+  "research_summary": "concise factual research summary",
   "sources": [
     {{
-      "title": "Source title",
+      "title": "source title",
       "url": "https://..."
     }}
   ]
 }}
-
-Use 2 to 4 credible sources whenever possible.
 """
 
     response = client.responses.create(
         model=model,
-        tools=[
-            {"type": "web_search"}
-        ],
-        input=prompt
+        tools=[{"type": "web_search"}],
+        input=prompt,
     )
 
-    research =  extract_json_object(response.output_text)
-    
-
-    return research
+    return extract_json_object(response.output_text)
 
 def load_recent_topics(base_dir, limit=20):
     history_file = base_dir / "topic-history.txt"
@@ -383,6 +443,49 @@ def append_topic_history(base_dir, topic):
 
     with open(history_file, "a", encoding="utf-8") as f:
         f.write(topic.strip() + "\n")
+
+def validate_generated_post(content_plan, research=None, auto_topic=False):
+    post_text = content_plan.get("post_text", "").strip()
+
+    if not post_text:
+        raise RuntimeError("Generated post text is empty")
+
+    bad_phrases = [
+        "can't responsibly",
+        "cannot responsibly",
+        "research section is empty",
+        "please provide",
+        "i need more information",
+        "i don't have enough information",
+        "unable to create",
+        "cannot create this post",
+    ]
+
+    lower_post = post_text.lower()
+
+    for phrase in bad_phrases:
+        if phrase in lower_post:
+            raise RuntimeError(
+                f"Generated post failed validation: '{phrase}'"
+            )
+
+    if len(post_text) < 300:
+        raise RuntimeError(
+            "Generated post is unusually short and requires review"
+        )
+
+    if auto_topic:
+        if not research:
+            raise RuntimeError(
+                "Auto-topic mode returned no research object"
+            )
+
+        if not research.get("research_summary"):
+            raise RuntimeError(
+                "Auto-topic research summary is empty"
+            )
+
+    return True
 
 def main():
     parser = argparse.ArgumentParser(description="Generate and optionally publish LinkedIn posts with OpenAI + LinkedIn.")
@@ -414,7 +517,7 @@ def main():
 
     linkedin_version = os.getenv("LINKEDIN_VERSION", "202608")
     text_model = os.getenv("OPENAI_TEXT_MODEL", "gpt-5.6")
-    image_model = os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-1")
+    image_model = os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-2")
 
     base_dir = Path(args.base_dir).expanduser()
     ensure_dirs(base_dir)
@@ -478,9 +581,16 @@ def main():
         print("[1/5] Generating post plan with OpenAI...")
 
         plan = generate_content_plan(
-            client,
-            args.topic,
-            text_model=text_model
+            client=client,
+            model=text_model,
+            topic=args.topic,
+            research=research,
+        )
+        
+        validate_generated_post(
+            plan,
+            research=research,
+            auto_topic=args.auto_topic
         )
         if research:
             plan["research"] = research
