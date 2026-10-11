@@ -174,6 +174,9 @@ def test_dashboard_auth_csrf_and_login(web):
     assert client.get('/').status_code == 200
     assert client.post('/publish/post.json', data={'csrf_token': 'invalid'}).status_code == 400
     assert client.get('/').headers['X-Frame-Options'] == 'DENY'
+    policy = client.get('/linkedin/connect').headers['Content-Security-Policy']
+    assert "form-action 'self' https://www.linkedin.com" in policy
+    assert "script-src 'none'" in policy
 
 
 def test_edit_invalidation_stale_publish_and_preview(web, data, monkeypatch):
