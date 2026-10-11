@@ -255,7 +255,7 @@ def callback():
         if response.status_code != 200:
             raise ValueError('Token exchange rejected')
         data = response.json()
-        scopes = set(data.get('scope', '').split())
+        scopes = set(data.get('scope', '').replace(',', ' ').split())
         if not {'openid', 'profile', 'w_member_social'}.issubset(scopes):
             raise ValueError('Required scopes missing')
         identity = requests.get('https://api.linkedin.com/v2/userinfo', headers={'Authorization': 'Bearer ' + data['access_token']},
@@ -289,3 +289,4 @@ def terms():
 
 if __name__ == '__main__':
     app.run(host='127.0.0.1', port=5000, debug=False)
+
