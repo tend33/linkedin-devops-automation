@@ -33,3 +33,7 @@ jenkins/agent-work/
 *.backup
 *.before-*
 published/
+
+# Encrypted credentials, consent records and rate-limit database
+private/
+.pytest_cache/

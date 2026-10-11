@@ -2,12 +2,21 @@ services:
   linkedin-auto:
     build: .
     image: linkedin-auto:local
-    container_name: linkedin-auto
-
-    env_file:
-      - .env
-
+    env_file: .env
+    environment:
+      APP_BASE_DIR: /app
     volumes:
-      - /volume1/docker/linkedin-automation:/app
-
+      - ${LINKEDIN_PROJECT_DIR:-.}:/app
     restart: "no"
+  dashboard:
+    build: .
+    image: linkedin-auto:local
+    env_file: .env
+    environment:
+      APP_BASE_DIR: /app
+    entrypoint: ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "660", "web.app:app"]
+    ports:
+      - "127.0.0.1:5000:5000"
+    volumes:
+      - ${LINKEDIN_PROJECT_DIR:-.}:/app
+    restart: unless-stopped

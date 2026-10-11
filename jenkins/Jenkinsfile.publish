@@ -1,299 +1,72 @@
 pipeline {
-    agent {
-        label 'docker'
-    }
-
-    options {
-        disableConcurrentBuilds()
-        timestamps()
-    }
-
+    agent { label 'docker' }
+    options { disableConcurrentBuilds(); timestamps() }
     parameters {
-        string(
-            name: 'GENERATE_BUILD',
-            defaultValue: '',
-            description: 'linkedin-generate build number. Leave blank to use latest successful generation.'
-        )
+        string(name: 'PROJECT_DIR', defaultValue: '', description: 'Project path on Docker host and agent; or set LINKEDIN_PROJECT_DIR on the agent.')
+        string(name: 'GENERATE_BUILD', defaultValue: '', description: 'Generation build number; blank selects latest manifest.')
     }
-
     stages {
-
-        stage('Select Generated Post') {
-    steps {
-        sh '''
-            set -eu
-
-            cd /volume1/docker/linkedin-automation
-
-            REQUESTED_BUILD="${GENERATE_BUILD:-}"
-
-            if [ -n "$REQUESTED_BUILD" ]; then
-                MANIFEST="jenkins-builds/${REQUESTED_BUILD}.env"
-            else
-                MANIFEST="jenkins-builds/latest.env"
-            fi
-
-            if [ ! -f "$MANIFEST" ]; then
-                echo "Manifest not found: $MANIFEST"
-                exit 1
-            fi
-
-            . "$MANIFEST"
-
-            # Older manifests may not contain GENERATE_BUILD.
-            # If a build number was entered manually, use that.
-            if [ -z "${GENERATE_BUILD:-}" ] && [ -n "$REQUESTED_BUILD" ]; then
-                GENERATE_BUILD="$REQUESTED_BUILD"
-            fi
-
-            # For older latest.env files, find the numbered manifest
-            # containing the same draft filename.
-            if [ -z "${GENERATE_BUILD:-}" ]; then
-                for FILE in jenkins-builds/[0-9]*.env; do
-                    [ -f "$FILE" ] || continue
-
-                    if grep -Fqx "DRAFT_FILE=$DRAFT_FILE" "$FILE"; then
-                        GENERATE_BUILD=$(basename "$FILE" .env)
-                        break
-                    fi
-                done
-            fi
-
-            if [ -z "${GENERATE_BUILD:-}" ]; then
-                echo "Unable to determine generation build number."
-                exit 1
-            fi
-
-            test -f "drafts/$DRAFT_FILE"
-            test -f "images/$IMAGE_FILE"
-            test -f "drafts/$TEXT_FILE"
-
-            {
-                echo "GENERATE_BUILD=$GENERATE_BUILD"
-                echo "DRAFT_FILE=$DRAFT_FILE"
-                echo "IMAGE_FILE=$IMAGE_FILE"
-                echo "TEXT_FILE=$TEXT_FILE"
-            } > "$WORKSPACE/selected.env"
-
-            echo "===== SELECTED POST ====="
-            echo "Generation build: $GENERATE_BUILD"
-            echo "Draft: $DRAFT_FILE"
-            echo "Image: $IMAGE_FILE"
-        '''
-    }
-}
-
-        stage('Duplicate Publish Check') {
-            steps {
-                sh '''
-            set -eu
-
-            . "$WORKSPACE/selected.env"
-
-            cd /volume1/docker/linkedin-automation
-
-            PREFIX=$(basename "$DRAFT_FILE" .json)
-
-            BUILD_MARKER="jenkins-builds/${GENERATE_BUILD}.published"
-            DRAFT_MARKER="published/${PREFIX}.published"
-
-            echo "===== DUPLICATE PUBLISH CHECK ====="
-            echo "Generation build: $GENERATE_BUILD"
-            echo "Draft: $DRAFT_FILE"
-
-            if [ -f "$DRAFT_MARKER" ]; then
-                echo "======================================"
-                echo "STOP: This draft was already published."
-                echo "======================================"
-                cat "$DRAFT_MARKER"
-                exit 1
-            fi
-
-            if [ -f "$BUILD_MARKER" ]; then
-                echo "=============================================="
-                echo "STOP: This generation build was already published."
-                echo "=============================================="
-                cat "$BUILD_MARKER"
-                exit 1
-            fi
-
-            echo "Duplicate check: OK"
-            echo "This post has not been published."
-        '''
-    }
-}
-
-        stage('Preview Post') {
+        stage('Select and snapshot for review') {
             steps {
                 sh '''
                     set -eu
-
-                    . "$WORKSPACE/selected.env"
-
-                    cd /volume1/docker/linkedin-automation
-
-                    echo "===== LINKEDIN POST PREVIEW ====="
-                    cat "drafts/$TEXT_FILE"
-                    echo ""
-                    echo "================================"
-                    echo "Image: $IMAGE_FILE"
+                    cd "${PROJECT_DIR:-${LINKEDIN_PROJECT_DIR:?Set PROJECT_DIR or LINKEDIN_PROJECT_DIR}}"
+                    case "${GENERATE_BUILD:-}" in *[!0-9]*) echo 'Build number must be numeric'; exit 1;; esac
+                    MANIFEST="jenkins-builds/${GENERATE_BUILD:-latest}.env"
+                    test -f "$MANIFEST"
+                    DRAFT_FILE=$(sed -n 's/^DRAFT_FILE=//p' "$MANIFEST")
+                    case "$DRAFT_FILE" in ''|*[!a-zA-Z0-9._-]*) echo 'Invalid draft name'; exit 1;; esac
+                    test -f "drafts/$DRAFT_FILE"
+                    PREFIX=${DRAFT_FILE%.json}
+                    test -f "images/$PREFIX.png"
+                    SUMMARY=$(docker compose run --rm -T linkedin-auto --base-dir /app --draft-json "/app/drafts/$DRAFT_FILE" --review-summary)
+                    DIGEST=$(printf '%s' "$SUMMARY" | jq -r .digest)
+                    rm -rf "$WORKSPACE/review"
+                    mkdir -p "$WORKSPACE/review"
+                    printf '%s' "$SUMMARY" > "$WORKSPACE/review/publication.json"
+                    cat "$WORKSPACE/review/publication.json"
+                    cp "drafts/$DRAFT_FILE" "$WORKSPACE/review/draft.json"
+                    cp "images/$PREFIX.png" "$WORKSPACE/review/image.png"
+                    jq -r '.post_text' "$WORKSPACE/review/draft.json" > "$WORKSPACE/review/post.txt"
+                    jq '.research // {}' "$WORKSPACE/review/draft.json" > "$WORKSPACE/review/research.json"
+                    # Recheck after copying: an edit during capture invalidates this review.
+                    CHECK=$(docker compose run --rm -T linkedin-auto --base-dir /app --draft-json "/app/drafts/$DRAFT_FILE" --review-digest)
+                    test "$CHECK" = "$DIGEST"
+                    printf '%s' "$DRAFT_FILE" > "$WORKSPACE/draft-name"
+                    printf '%s' "$DIGEST" > "$WORKSPACE/review-digest"
+                    cat "$WORKSPACE/review/post.txt"
+                    cat "$WORKSPACE/review/research.json"
+                '''
+                archiveArtifacts(artifacts: 'review/*', fingerprint: true)
+            }
+        }
+        stage('Human approval') {
+            steps {
+                script {
+                    // Jenkins Job/Build and Job/Cancel permissions must be restricted to the owner.
+                    env.APPROVED_BY = input(message: "Review saved text, image.png and research in ${env.BUILD_URL}artifact/review/. AI-prefilled content is subject to the dashboard privacy notice. Edit in the dashboard or source draft and rerun this job if needed. Approve this exact draft and image for PUBLIC posting to the connected member account?", ok: 'Approve public publication', submitterParameter: 'APPROVER')
+                }
+            }
+        }
+        stage('Approve version and publish through shared safety boundary') {
+            steps {
+                sh '''
+                    set -eu
+                    cd "${PROJECT_DIR:-${LINKEDIN_PROJECT_DIR:?Set project path}}"
+                    DRAFT_FILE=$(cat "$WORKSPACE/draft-name")
+                    DIGEST=$(cat "$WORKSPACE/review-digest")
+                    docker compose run --rm -T linkedin-auto --base-dir /app \
+                        --draft-json "/app/drafts/$DRAFT_FILE" --approve \
+                        --expected-digest "$DIGEST" --approved-by "$APPROVED_BY"
+                    docker compose run --rm -T linkedin-auto --base-dir /app \
+                        --draft-json "/app/drafts/$DRAFT_FILE" --publish
                 '''
             }
         }
-        
-        stage('Review Research') {
-    steps {
-        sh '''
-            set -eu
-
-            . "$WORKSPACE/selected.env"
-
-            cd /volume1/docker/linkedin-automation
-
-            echo ""
-            echo "===== RESEARCH USED FOR THIS POST ====="
-
-            if jq -e '.research' "drafts/$DRAFT_FILE" >/dev/null 2>&1; then
-
-                echo ""
-                echo "TOPIC"
-                echo "====="
-                jq -r '.research.topic // "Unknown"' \
-                  "drafts/$DRAFT_FILE"
-
-                echo ""
-                echo "RESEARCH SUMMARY"
-                echo "================"
-                jq -r '.research.research_summary // "No summary available."' \
-                  "drafts/$DRAFT_FILE"
-
-                echo ""
-                echo "SOURCES"
-                echo "======="
-                jq -r '
-                    .research.sources[]? |
-                    "- " + (.title // "Untitled source") +
-                    "\n  " + (.url // "No URL")
-                ' "drafts/$DRAFT_FILE"
-
-            else
-                echo "This post does not contain web research."
-            fi
-
-            echo ""
-            echo "======================================="
-        '''
     }
-}
-
-        stage('Approval') {
-            steps {
-                input(
-                    message: 'Publish this post to LinkedIn?',
-                    ok: 'Publish'
-                )
-            }
-        }
-       
-       stage('Publish to LinkedIn') {
-    steps {
-        sh '''
-            set -eu
-
-            . "$WORKSPACE/selected.env"
-
-            cd /volume1/docker/linkedin-automation
-
-            PREFIX=$(basename "$DRAFT_FILE" .json)
-
-            BUILD_MARKER="jenkins-builds/${GENERATE_BUILD}.published"
-            DRAFT_MARKER="published/${PREFIX}.published"
-            DRAFT_LOCK="published/${PREFIX}.publishing"
-
-            mkdir -p published
-
-            echo "===== PRE-PUBLISH SAFETY CHECK ====="
-
-            # Confirm Jenkins can write to the marker directory
-            TEST_MARKER="published/.write-test-${BUILD_NUMBER}"
-
-            if ! touch "$TEST_MARKER"; then
-                echo "ERROR: Jenkins cannot write to published/"
-                echo "Aborting BEFORE contacting LinkedIn."
-                exit 1
-            fi
-
-            rm -f "$TEST_MARKER"
-
-            echo "Marker directory write test: OK"
-
-            # Prevent two publish attempts running for the same draft
-            if [ -f "$DRAFT_LOCK" ]; then
-                echo "======================================"
-                echo "STOP: This draft is already being published."
-                echo "======================================"
-                cat "$DRAFT_LOCK"
-                exit 1
-            fi
-
-            # Create temporary publishing lock
-            cat > "$DRAFT_LOCK" <<EOF
-GENERATE_BUILD=$GENERATE_BUILD
-PUBLISH_BUILD=$BUILD_NUMBER
-DRAFT_FILE=$DRAFT_FILE
-STARTED_AT=$(date -Iseconds)
-EOF
-
-            echo "Publish lock created: $DRAFT_LOCK"
-
-            echo ""
-            echo "===== PUBLISHING TO LINKEDIN ====="
-
-            docker compose run --rm linkedin-auto \
-              --base-dir /app \
-              --draft-json "/app/drafts/$DRAFT_FILE" \
-              --image-file "/app/images/$IMAGE_FILE" \
-              --publish
-
-            PUBLISHED_AT=$(date -Iseconds)
-
-            cat > "$DRAFT_MARKER" <<EOF
-GENERATE_BUILD=$GENERATE_BUILD
-PUBLISH_BUILD=$BUILD_NUMBER
-DRAFT_FILE=$DRAFT_FILE
-IMAGE_FILE=$IMAGE_FILE
-PUBLISHED_AT=$PUBLISHED_AT
-PUBLISHED_BY=jenkins
-EOF
-
-            cp "$DRAFT_MARKER" "$BUILD_MARKER"
-
-            # Remove temporary lock only after markers are safely created
-            rm -f "$DRAFT_LOCK"
-
-            echo ""
-            echo "===== PUBLISH COMPLETE ====="
-            echo "Draft marker: $DRAFT_MARKER"
-            echo "Build marker: $BUILD_MARKER"
-            echo "Publish lock removed."
-        '''
-    }
-}
-
-
-       }
-
     post {
-        success {
-            echo 'LinkedIn post published successfully.'
-        }
-
-        aborted {
-            echo 'LinkedIn publishing cancelled.'
-        }
-
-        failure {
-            echo 'LinkedIn publishing failed.'
-        }
+        success { echo 'Published; shared publication receipt saved.' }
+        aborted { echo 'Publication cancelled.' }
+        failure { echo 'Stopped. Reconcile LinkedIn status before retrying or removing any publishing lock.' }
     }
 }

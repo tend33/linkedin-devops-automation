@@ -1,0 +1,14 @@
+.git
+.env
+private/
+published/
+drafts/
+images/
+logs/
+jenkins-builds/
+jenkins/home/
+jenkins/agent-work/
+jenkins/agent.env
+.venv/
+__pycache__/
+topic-history.txt
