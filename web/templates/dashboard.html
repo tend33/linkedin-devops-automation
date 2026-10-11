@@ -29,6 +29,12 @@
 </header>
 
 <main class="container main">
+    <div class="card">
+      <a href="{{ url_for('connect') }}">Connect / reconnect LinkedIn</a> ·
+      <a href="{{ url_for('privacy') }}">Privacy notice</a> · <a href="{{ url_for('terms') }}">User agreement</a>
+      <form method="post" action="{{ url_for('disconnect_account') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button>Disconnect and delete local LinkedIn credentials</button></form>
+      <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button>Log out</button></form>
+    </div>
 
     {% with messages = get_flashed_messages() %}
         {% if messages %}

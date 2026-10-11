@@ -7,6 +7,8 @@ import os
 import re
 import sys
 import time
+from publishing import approve, snapshot, publish_approved
+from linkedin_auth import credentials
 from datetime import datetime
 from pathlib import Path
 
@@ -239,9 +241,10 @@ def initialize_linkedin_image_upload(token: str, version: str, owner_urn: str) -
         headers=linkedin_headers(token, version, json_content=True),
         json=payload,
         timeout=60,
+        allow_redirects=False,
     )
     if r.status_code >= 300:
-        raise RuntimeError(f"LinkedIn initializeUpload failed: {r.status_code} {r.text}")
+        raise RuntimeError(f"LinkedIn initializeUpload failed (HTTP {r.status_code}); check permissions, expiry and rate limits")
 
     data = r.json()
     upload_url = data["value"]["uploadUrl"]
@@ -256,23 +259,13 @@ def upload_image_to_linkedin(upload_url: str, image_bytes: bytes):
         headers={"Content-Type": "image/png"},
         data=image_bytes,
         timeout=180,
+        allow_redirects=False,
     )
 
     if put_resp.status_code < 300:
         return
 
-    # fallback in case endpoint expects POST instead
-    post_resp = requests.post(
-        upload_url,
-        headers={"Content-Type": "image/png"},
-        data=image_bytes,
-        timeout=180,
-    )
-    if post_resp.status_code >= 300:
-        raise RuntimeError(
-            f"LinkedIn image upload failed. PUT={put_resp.status_code} {put_resp.text} "
-            f"POST={post_resp.status_code} {post_resp.text}"
-        )
+    raise RuntimeError(f"LinkedIn image upload failed (HTTP {put_resp.status_code})")
 
 
 def create_linkedin_post(
@@ -315,10 +308,11 @@ def create_linkedin_post(
         headers=linkedin_headers(token, version, json_content=True),
         json=payload,
         timeout=60,
+        allow_redirects=False,
     )
 
     if r.status_code != 201:
-        raise RuntimeError(f"LinkedIn post creation failed: {r.status_code} {r.text}")
+        raise RuntimeError(f"LinkedIn post creation failed (HTTP {r.status_code}); reconcile status before retrying")
 
     post_id = r.headers.get("x-restli-id")
     body = None
@@ -386,6 +380,9 @@ CONTENT DIVERSITY RULES:
 Recent topics:
 
 {recent_topics_text}
+
+Do not search LinkedIn, scrape LinkedIn profiles/posts, or use member data.
+Use public vendor documentation and other non-LinkedIn sources.
 
 Research the selected topic using web search when it concerns a recent
 release, product change, security issue or other time-sensitive fact.
@@ -497,10 +494,17 @@ def main():
     parser.add_argument("--topic", help="Topic for the LinkedIn post")
     parser.add_argument("--draft-json", help="Existing approved draft JSON to publish")
     parser.add_argument("--image-file", help="Existing approved image to publish")
+    parser.add_argument("--approve", action="store_true", help="Record explicit human approval of an existing reviewed draft")
+    parser.add_argument("--expected-digest", help="Digest captured when reviewing the draft")
+    parser.add_argument("--approved-by", help="Authenticated reviewer identifier")
+    parser.add_argument("--review-summary", action="store_true", help="Print account, audience and digest as JSON")
+    parser.add_argument("--review-digest", action="store_true", help="Print draft/account/image digest without publishing")
     parser.add_argument("--publish", action="store_true", help="Actually publish to LinkedIn")
     parser.add_argument("--text-only", action="store_true", help="Skip image generation and publish text only")
     parser.add_argument("--base-dir", default=str(Path.home() / "linkedin-automation"), help="Working directory")
     args = parser.parse_args()
+    if args.review_summary:
+        args.review_digest = True
     #if not args.topic and not args.draft_json:
     #    parser.error("Provide either --topic or --draft-json")
     if not args.topic and not args.draft_json and not args.auto_topic:
@@ -508,24 +512,51 @@ def main():
             "Provide --topic, --auto-topic, or --draft-json"
         )
 
-    openai_api_key = require_env("OPENAI_API_KEY")
-    linkedin_token = require_env("LINKEDIN_TOKEN")
-    author_urn = os.getenv("LINKEDIN_URN")
-    if not author_urn:
-        member_id = require_env("LINKEDIN_MEMBER_ID")
-        author_urn = f"urn:li:person:{member_id}"
-
-    linkedin_version = os.getenv("LINKEDIN_VERSION", "202608")
+    if (args.publish or args.approve or args.review_digest) and not args.draft_json:
+        parser.error("Publishing and approval require an existing reviewed --draft-json")
+    if sum(bool(x) for x in (args.publish, args.approve, args.review_digest)) > 1:
+        parser.error("Review, approve and publish are separate actions")
+    if args.draft_json and (args.topic or args.auto_topic):
+        parser.error("Do not combine a saved draft with generation")
+    base_dir = Path(args.base_dir).expanduser().resolve()
+    ensure_dirs(base_dir)
+    if args.draft_json:
+        path = Path(args.draft_json).resolve()
+        if path.parent != base_dir / "drafts":
+            parser.error("Draft must be inside the configured drafts directory")
+        if args.image_file and Path(args.image_file).resolve() != base_dir / "images" / (path.stem + ".png"):
+            parser.error("Use the draft's matching image; arbitrary image overrides are disallowed")
+        if args.publish or args.approve or args.review_digest:
+            token, author = credentials(base_dir)
+            plan, image, digest = snapshot(base_dir, path.name, author, args.text_only)
+            if args.review_digest:
+                print(json.dumps({"digest": digest, "author": author, "visibility": "PUBLIC", "text_only": args.text_only}) if args.review_summary else digest)
+                return
+            if args.approve:
+                approve(base_dir, path.name, author, args.expected_digest, args.approved_by, args.text_only)
+                print("Approval recorded for the reviewed draft version (expires in 24 hours).")
+                return
+            version = require_env("LINKEDIN_VERSION")
+            if not re.fullmatch(r"20[0-9]{2}(0[1-9]|1[0-2])", version):
+                raise ValueError("LINKEDIN_VERSION must be a supported YYYYMM version")
+            def publisher(plan, image):
+                image_urn = None
+                if image is not None:
+                    upload_url, image_urn = initialize_linkedin_image_upload(token, version, author)
+                    upload_image_to_linkedin(upload_url, image)
+                    time.sleep(3)
+                post_id, _ = create_linkedin_post(token, version, author, plan["post_text"],
+                    image_urn, plan.get("alt_text"), plan.get("image_title"))
+                return {"post_id": post_id, "author_urn": author, "linkedin_version": version}
+            result = publish_approved(base_dir, path.name, author, publisher, args.text_only)
+            print(f"Published successfully. Post ID: {result['post_id']}")
+            return
     text_model = os.getenv("OPENAI_TEXT_MODEL", "gpt-5.6")
     image_model = os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-2")
-
-    base_dir = Path(args.base_dir).expanduser()
-    ensure_dirs(base_dir)
-
-    client = OpenAI(api_key=openai_api_key)
+    client = OpenAI(api_key=require_env("OPENAI_API_KEY")) if not args.draft_json else None
 
     image_bytes = None
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
 
     if args.draft_json:
         print("[1/5] Loading approved draft...")
@@ -624,55 +655,7 @@ def main():
     if image_bytes:
         print(f"Image saved to:      {image_path}")
 
-    if not args.publish:
-        print("\nDry run only. Nothing was published.")
-        print("To publish, rerun with --publish")
-        return
-
-    print(f"[3/5] Publishing to LinkedIn...")
-    image_urn = None
-
-    if image_bytes:
-        print(" - Initializing LinkedIn image upload...")
-        upload_url, image_urn = initialize_linkedin_image_upload(
-            token=linkedin_token,
-            version=linkedin_version,
-            owner_urn=author_urn,
-        )
-        print(f" - Uploading image to LinkedIn DMS...")
-        upload_image_to_linkedin(upload_url, image_bytes)
-        print(f" - LinkedIn image URN: {image_urn}")
-        # brief pause to give LinkedIn processing time
-        time.sleep(3)
-
-    post_id, post_body = create_linkedin_post(
-        token=linkedin_token,
-        version=linkedin_version,
-        author_urn=author_urn,
-        commentary=plan["post_text"],
-        image_urn=image_urn,
-        alt_text=plan.get("alt_text"),
-        image_title=plan.get("image_title"),
-    )
-
-    publish_result = {
-        "topic": args.topic,
-        "author_urn": author_urn,
-        "linkedin_version": linkedin_version,
-        "post_id": post_id,
-        "image_urn": image_urn,
-        "draft_json_path": str(draft_json_path),
-        "draft_text_path": str(draft_text_path),
-        "image_path": str(image_path) if image_bytes else None,
-        "response_body": post_body,
-        "published_at": datetime.now().isoformat(),
-    }
-    save_json(publish_log_path, publish_result)
-
-    print(f"[4/5] Published successfully")
-    print(f"Post ID: {post_id}")
-    print(f"Publish log saved to: {publish_log_path}")
-    print(f"[5/5] Done")
+    print("\nDraft only. Review in the authenticated dashboard or Jenkins before publishing.")
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ pipeline {
     }
 
     parameters {
+        string(name: 'PROJECT_DIR', defaultValue: '', description: 'Project directory on Docker host/agent; or set LINKEDIN_PROJECT_DIR.')
         string(
             name: 'TOPIC',
             defaultValue: '',
@@ -27,7 +28,7 @@ pipeline {
         sh '''
             set -eu
 
-            cd /volume1/docker/linkedin-automation
+            cd "${PROJECT_DIR:-${LINKEDIN_PROJECT_DIR:?Set PROJECT_DIR or LINKEDIN_PROJECT_DIR}}"
 
             if [ -n "${TOPIC:-}" ]; then
 
@@ -56,7 +57,7 @@ pipeline {
         sh '''
             set -eu
 
-            cd /volume1/docker/linkedin-automation
+            cd "${PROJECT_DIR:-${LINKEDIN_PROJECT_DIR:?Set PROJECT_DIR or LINKEDIN_PROJECT_DIR}}"
 
             DRAFT=$(ls -1t drafts/*.json | head -1)
             PREFIX=$(basename "$DRAFT" .json)
@@ -133,7 +134,7 @@ EOF
         sh '''
             set -eu
 
-            cd /volume1/docker/linkedin-automation
+            cd "${PROJECT_DIR:-${LINKEDIN_PROJECT_DIR:?Set PROJECT_DIR or LINKEDIN_PROJECT_DIR}}"
 
             . "$WORKSPACE/output/${BUILD_NUMBER}.env"
 

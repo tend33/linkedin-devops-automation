@@ -39,9 +39,18 @@
 
         <h2>LinkedIn Post</h2>
 
-        <div class="post-text">
-{{ draft.post_text }}
-        </div>
+        <p>AI-prefilled content is subject to the <a href="{{ url_for('privacy') }}">privacy notice</a>. Edit it below and verify facts, rights and personal claims before approval.</p>
+        {% if not published and not publishing %}
+        <form method="post" action="{{ url_for('edit', filename=filename) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="revision" value="{{ revision }}">
+          <label for="post_text">Post text</label>
+          <textarea id="post_text" name="post_text" rows="16" maxlength="3000" style="width:100%">{{ draft.post_text }}</textarea>
+          <label>Image description <input type="text" name="alt_text" value="{{ draft.alt_text or '' }}"></label>
+          <label>Image title <input type="text" name="image_title" value="{{ draft.image_title or '' }}"></label>
+          <button class="btn btn-secondary">Save edits, then review again</button>
+        </form>
+        {% else %}<div class="post-text">{{ draft.post_text }}</div>{% endif %}
 
     </div>
 
@@ -141,12 +150,15 @@
             'publish',
             filename=filename
         ) }}"
-        onsubmit="return confirm(
-            'Publish this post to LinkedIn?'
-        );"
+
     >
 
-        <button
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="digest" value="{{ digest or '' }}">
+        <input type="hidden" name="text_only" value="{{ 'true' if text_only else 'false' }}">
+        <p>Account: {{ author or 'Not connected' }} · Audience: Public · {{ 'Text only' if text_only else 'Text and image' }}</p>
+        <label><input type="checkbox" name="confirm" value="yes" required> I reviewed the saved text, image and sources and approve this exact version for public publication. Save any edits before approving.</label>
+        <button {{ 'disabled' if not digest else '' }}
             type="submit"
             class="btn btn-primary"
         >
