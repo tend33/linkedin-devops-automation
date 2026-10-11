@@ -206,7 +206,8 @@ def test_login_rate_limit(web):
     assert client.post('/login', data={'csrf_token': csrf, 'password': 'bad'}).status_code == 429
 
 
-def test_oauth_state_consent_success_and_replay(web, data, monkeypatch):
+@pytest.mark.parametrize('granted_scope', ['openid profile w_member_social', 'openid,profile,w_member_social', 'openid, profile w_member_social'])
+def test_oauth_state_consent_success_and_replay(web, data, monkeypatch, granted_scope):
     mod, client = web
     csrf = owner(client)
     assert client.post('/linkedin/connect', data=csrf).status_code == 400
@@ -219,7 +220,7 @@ def test_oauth_state_consent_success_and_replay(web, data, monkeypatch):
     client.post('/linkedin/connect', data={**csrf, 'consent': 'yes'})
     with client.session_transaction() as s:
         state = s['oauth_state']
-    monkeypatch.setattr(mod.requests, 'post', Mock(return_value=SimpleNamespace(status_code=200, json=lambda: {'access_token':'oauth-secret', 'expires_in':3600, 'scope':'openid profile w_member_social'})))
+    monkeypatch.setattr(mod.requests, 'post', Mock(return_value=SimpleNamespace(status_code=200, json=lambda: {'access_token':'oauth-secret', 'expires_in':3600, 'scope':granted_scope})))
     monkeypatch.setattr(mod.requests, 'get', Mock(return_value=SimpleNamespace(status_code=200, json=lambda: {'sub':'test_member'})))
     assert client.get('/linkedin/callback?state=' + state + '&code=code').status_code == 302
     assert auth.credentials(data) == ('oauth-secret', AUTHOR)
@@ -273,3 +274,21 @@ def test_generation_needs_no_linkedin_credentials(tmp_path, monkeypatch):
     cli.main()
     assert len(list((tmp_path / 'drafts').glob('*.json'))) == 1
     publish.assert_not_called()
+
+
+
+@pytest.mark.parametrize('granted_scope', ['', 'openid,profile', 'openid,w_member_social'])
+def test_oauth_missing_scopes_cannot_store_token(web, data, monkeypatch, granted_scope):
+    mod, client = web
+    csrf = owner(client)
+    client.post('/linkedin/connect', data={**csrf, 'consent': 'yes'})
+    with client.session_transaction() as s:
+        state = s['oauth_state']
+    monkeypatch.setattr(mod.requests, 'post', Mock(return_value=SimpleNamespace(
+        status_code=200, json=lambda: {'access_token': 'oauth-secret', 'expires_in': 3600, 'scope': granted_scope})))
+    identity = Mock()
+    monkeypatch.setattr(mod.requests, 'get', identity)
+    response = client.get('/linkedin/callback?state=' + state + '&code=code', follow_redirects=True)
+    assert b'LinkedIn connection failed' in response.data
+    assert not auth.token_path(data).exists()
+    identity.assert_not_called()
